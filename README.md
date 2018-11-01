@@ -74,8 +74,84 @@ docker.io/ubuntu                               latest              sha256:29934a
 docker.io/redis                                latest              sha256:481678b4b5ea1cb4e8d38ed6677b2da9b9e057cf7e1b6c988ba96651c6f6eff3   1babb1dde7e1                                                                                             12 days ago         94.9 MB
 docker.io/centos                               latest              sha256:67dad89757a55bfdfabec8abd0e22f8c7c12a1856514726470228063ed86593b   75835a67d134                                                                                             3 weeks ago         200 MB
 
+(NB Containers need to be linux on linux or windows on windows)
 
+Image layers work like:
+  Base LAyer                    <-- Kernel file system (eg Centos) - this makes container look and feel like selected OS on top of host OS
+  Layer 2 - eg App layer        <-- deployed application
+  Layer 3 - eg updates          <--- any applied updates
+  Layer 4 - writeabvle layer    <-- top layer is the only writeable layer
+Union file system makes this look like a single coherent image
 
+We can see references to our layers in /var/lib/docker/<file system driver>/diff  or /var/lib/docker/<file system driver>/ eg:
+  ls /var/lib/docker/overlay2/
+  ls /var/lib/docker/aufs/diff
+  
+ We can see how each layer gets created:
+  docker history redis
+  IMAGE               CREATED             CREATED BY                                      SIZE                COMMENT
+  1babb1dde7e1        12 days ago         /bin/sh -c #(nop)  CMD ["redis-server"]         0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop)  EXPOSE 6379/tcp              0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop)  ENTRYPOINT ["docker-ent...   0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop) COPY file:b63bb2d2b8d095...   374 B               
+  <missing>           12 days ago         /bin/sh -c #(nop) WORKDIR /data                 0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop)  VOLUME [/data]               0 B                 
+  <missing>           12 days ago         /bin/sh -c mkdir /data && chown redis:redi...   0 B                 
+  <missing>           12 days ago         /bin/sh -c set -ex;   buildDeps='   ca-cer...   36.3 MB             
+  <missing>           12 days ago         /bin/sh -c #(nop)  ENV REDIS_DOWNLOAD_SHA=...   0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop)  ENV REDIS_DOWNLOAD_URL=...   0 B                 
+  <missing>           12 days ago         /bin/sh -c #(nop)  ENV REDIS_VERSION=5.0.0      0 B                 
+  <missing>           2 weeks ago         /bin/sh -c set -ex;   fetchDeps="   ca-cer...   3 MB                
+  <missing>           2 weeks ago         /bin/sh -c #(nop)  ENV GOSU_VERSION=1.10        0 B                 
+  <missing>           2 weeks ago         /bin/sh -c groupadd -r redis && useradd -r...   329 kB              
+  <missing>           2 weeks ago         /bin/sh -c #(nop)  CMD ["bash"]                 0 B                 
+  <missing>           2 weeks ago         /bin/sh -c #(nop) ADD file:f8f26d117bc4a92...   55.3 MB 
+Each non-0b SIZEd action results in a layer - so redis image will have 5 layers (exept in this case the mkdir action is so small it gets rounded to 0 - so redis has 6 layers). The actions which dont create layers are adding details to the image json file
+    
+We can see how many layers and their hashes in an image by running docker image inpect:
+  docker image inspect redis
+              .....
+                "Layers": [
+                "sha256:237472299760d6726d376385edd9e79c310fe91d794bc9870d038417d448c2d5",
+                "sha256:197ffb073b01a6995ad4b0c78885a7ae78e0ff7aac93c1020ebaec8ad7a154fe",
+                "sha256:aa1a19279a9ad6c1e94e98ad45c1d27a0432b8e90706da6ffdcef10586537131",
+                "sha256:79a66d80dbb46cc128520a92d82fd55a8efc42f6a10b2974ab247f1de2a206e2",
+                "sha256:edf7dde91cc5d207b2f1aa8c364f26409d5b3681f31a4a5a1832404e43fae74c",
+                "sha256:b643e67918745678b550890c331addbe7364757b9b018441531e1d5c04f9a93c"
+            ]
+            .....
+We can delete an image using "docker image rm" - which also removes corresponding files from /var/lib/docker
+  sudo ls /var/lib/docker/overlay2|wc -l
+  76
+
+  docker image rm redis
+  Untagged: redis:latest
+  Untagged: docker.io/redis@sha256:481678b4b5ea1cb4e8d38ed6677b2da9b9e057cf7e1b6c988ba96651c6f6eff3
+  Deleted: sha256:1babb1dde7e1fc7520ce56ce6d39843a074151bb192522b1988c65a067b15e96
+  Deleted: sha256:68f3c8e2388da48dd310e4642814feca68081445635716be58d7ebb69b611922
+  Deleted: sha256:b18dd54614f34239abc8a1165c90d5416a413d1f4c3c6711648e49e26e4445e7
+  Deleted: sha256:bf9efae34b1e94384b8cd011cf71591efab734b57961017bad608be56b7b1c9c
+  Deleted: sha256:7ae66985fd3a3a132fab51b4a43ed32fd14174179ad8c3041262670523a6104c
+  Deleted: sha256:bf45690ef12cc54743675646a8e0bafe0394706b7f9ed1c9b11423bb5494665b
+  Deleted: sha256:237472299760d6726d376385edd9e79c310fe91d794bc9870d038417d448c2d5
+
+  sudo ls /var/lib/docker/overlay2|wc -l
+  70
+
+Registries:
+Images are stored in repositories in registries. The official docker registry is dockerhub (amazon, google etc also have registries) but on-premise registries (eg docker's DTR Docker Trusted Registry) are also available
+
+ NB -  the layers stored on the file-system have content-hashes. 
+      Before storing in a registry the layers are compressed - therefor the store layers dont match the content hash. 
+      The compressed layers therefore get a second hash - the distribution-hash
+ 
+ 
+
+Containers:
+
+Images are a collection of read-only layers.
+A container is a read-write image running on top of an image. Many containers can share a single image so the image needs to be read-only.
+All changes eg when an app/process needs to create a file or amend an existing file, are done in the writeable layer - if a file from a read-only layer is being amended then it gets copied to the writeable layer - "copy-on-write"
 
 
 To spin up a centos container in interactive mode with tty terminal running bash:
@@ -174,7 +250,11 @@ Images are stored on docker host under /var/lib/docker/<storage driver> eg for c
       22a73683882664c8e42fed5169d1229d0ac5401f8e623a515173d838b82574cf
       22e5335684f051627b775da1e714edb79cf6a9b25a39e6541ad45aad8f2b2183
       etc...
-  
+
+===
+Note!!! the tag "latest" is a manually added tag - just because a repo is tagged as latest - it doesn't mean it is the latest version!!
+===
+
 
 Note docker images are "cut down" linux installs:
   docker images
@@ -187,7 +267,7 @@ Note docker images are "cut down" linux installs:
 
 eg sizes above are 85.8Mb, 200Mb, 4.41 Mb etc
 
-ets talk about containers
+Lets talk about containers
 Images provide the cookie cutter - containers are the cookie:
 Start the interactive container from the fedora image again:
   docker run -it fedora /bin/bash
@@ -223,7 +303,9 @@ Docker images are made up of multiple "layer images" or layers to avoid confusio
 
 Previously these could be viewed by:
   docker images --tree
-but this command was dropped in Docker version 1.6. as layer were re-engineered.
+but this command was dropped in Docker version 1.6. as layers were re-engineered to use hashing for security.
+
+(((NB
 The tree view can still be shown using a custom tool from dockerhub:
 
   # if docker client using local unix socket
@@ -234,6 +316,7 @@ The tree view can still be shown using a custom tool from dockerhub:
 
 Visualize the tree images by running:
   dockviz images -t
+  )))
 
 The way images were stored in dockerhub changed in Docker v1.1 to introduce better security. Layers are now hashed so that their contents cant be tampered with between a pull and subsequent push. This is explained here:
   https://windsock.io/explaining-docker-image-ids/
@@ -364,7 +447,7 @@ We can tail the container logs using:
 
 
 ==================================
-Containers Management
+Container Management
 ==================================
 Start an interactive container
   docker run -it ubuntu:14.04.1 /bin/bash
@@ -424,8 +507,361 @@ and ctrl-c takes the user back to the host CL without killing the container
     docker exec -it <container-id> /bin/bash 
 "exit" takes the user back to the host CL without killing the container
 
+CMD and ENTRYPOINT:
+Images can have a CMD or ENTRYPOINT (& CMD)
+If a CMD only is specified then this becomes the default program the container will run on startup
+If an ENTRYPOINT is defined this this becomes the default program the container will run on startup and any CMD string will be appended as args to the ENTRYPOINT.
+Both values can be seen in the Dockerfile or viewed on an image or a container by:
+  docker image inspect <image name>
+  eg
+  docker image inspect alpine
+                ],
+              "Cmd": [
+                 "/bin/sh"
+              ],
+              "ArgsEscaped": true,
+              "Image": "sha256:836dc9b148a584f3f42ac645c7d2bfa11423c1a07a054446314e11259f0e59b7",
+              "Volumes": null,
+              "WorkingDir": "",
+              "Entrypoint": null,
+  docker container inspect <container name>
+  eg
+  docker container inspect 5ab7bc3ac6bf
+               ],
+             "Cmd": null,
+              "ArgsEscaped": true,
+              "Image": "psweb",
+              "Volumes": null,
+              "WorkingDir": "/src",
+              "Entrypoint": [
+                 "node",
+                 "./app.js"
+             ],
+
+
+Both of these can be specifically over-ridden from the command line on a "docker run" command
+If command line args are passed to a "docker run" command then for an container with CMD only specied, the CLI args become the default process to run, for a container with an ENTRYPOIN defined the CLI Args become appended to the ENTRYPOINT
+
+Docker recommends using ENTRYPOINT to set the image’s main command, and then using CMD as the default flags. Here is an example Dockerfile that uses both instructions. eg:
+  
+  FROM ubuntu
+  ENTRYPOINT ["top", "-b"]
+  CMD ["-c"]
+
+ 
+ Container ports:
+ 
+ Specifying EXPOSE in the Dockerfile exposes a port from the running container to the outside world
+ This can be mapped to a port on the host using the -p flog:
+  docker container run -d  --name web1 -p 80:80 nginx          <-- runs container based on nginx mapping host port 80 to container port 80
+
+we can see port mappings using docker port:
+  docker port web1
+    80/tcp -> 0.0.0.0:80          <-- listening on all addresses on port 80
+To cleanup
+  docker container rm $(docker container ls -aq) -f     <-- force remove results of "docker list all"
+    
+===============================
+Docker logging
+===============================
+2 types - daemon and container (or app) logs
+
+Docker daemon logs:
+To see daemon logs do either:
+  journalctl -u docker.service
+ or
+  tail -f /var/log/messages
+
+Docker container logs:
+Docker "expects" logs get written to stdout and stderr - so ideally apps run as PID1 and write logs to these. If not then log files can be sym-linked or mounted in a volume container.
+Since docker 17 enterprise docker has log drivers - plugins for splunk, syslog, gelf (etc) - these forward container logs to logging solutions.
+Specify log drivers to use in the:
+  daemon.json
+Log drivers for specific containers can be overridden using:
+  --log-driver --log-opts
+
+Any logs created can then be inspected using:
+  docker logs <container>
+
+
+
+===============================
+Docker swarm
+===============================
+Swarm central to docker going forward 
+Swarm has 2 elements - secure clustring and orchestration. Orchestration may go to Kubernetes but secure clustering is key to docker future.
+
+Swarm mode: since 1.12 swarm mode (clustering workload management etc) has been build in
+
+Start swarm using:
+  dockerswarm init
+This docker host becomes the 1st swarm manager. It becomes:
+  swarm leader
+  swarm root CA (external CA's can be configured using swarm init --external-ca flag) so it can issue certs to the swarm members
+  gets a client certificate
+  creates an encrypted secure "etcd" cluster store which gets automatically distributed to any other managers in the swarm
+  (etcd is a distributed key value store that provides a reliable way to store data across a cluster of machines. It gracefully handles     leader elections during network partitions and will tolerate machine failure, including the leader. Applications can read and write data   into etcd eg to store database connection details or feature flags in etcd as key value pairs. These values can be watched, allowing       your app to reconfigure itself when they change)
+  Creates cryptographoc join tokens for new managers and for new workers
+
+Multiple swarm managers can be created and the auto-sync but only one is ever active.
+If a manager fails - another is elected to be the leader. This is all handled by RAFT - When the Docker Engine runs in swarm mode, manager nodes implement the Raft Consensus Algorithm to manage the global cluster state.
+Best practices fpr managers - have 3, 5 or 7 - low numbers improve decision making, odd numbers improve quorum and avoid split-brain.
+
+Also - raft works best on fast reliable networks so (for instance) dont place maagers in different amazon regions
+
+Worker nodes dont get access to the cluster store but they get a cert issued by the manager that identifies the worker, it's swarm and it's role (worker) and they also get a list of IPs for all managers should any one manager fail. Workers do all the app work.
+
+
+===============================
+Building a swarm
+===============================
+First check if we are in swarm mode:
+  docker system info
+    ...
+     Swarm: inactive
+    ...
+
+To create the swarm ( and therefore make this leader and root CA, issue a client cert, create secure encrypted distributed cluster store, create join tokens and cert rotation policy):
+  docker swarm init
+    Swarm initialized: current node (k99q6ic98c519uf2ofbe0s4jc) is now a manager.
+
+    To add a worker to this swarm, run the following command:
+
+    docker swarm join \
+    --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-3w34mnkpastor6lgpb7bzsyy0 \
+    192.168.209.101:2377
+
+    To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructions.
+
+docker system info now shows swarm mode is active along with details of the swarm :
+  docker system info
+    Swarm: active
+    NodeID: k99q6ic98c519uf2ofbe0s4jc
+    Is Manager: true
+    ClusterID: wxaqlcr7s1umy9y8opp4ou0ub
+    Managers: 1
+    Nodes: 1
+    Orchestration:
+      Task History Retention Limit: 5
+    Raft:
+     Snapshot Interval: 10000
+      Number of Old Snapshots to Retain: 0
+      Heartbeat Tick: 1
+      Election Tick: 3
+    Dispatcher:
+      Heartbeat Period: 5 seconds
+    CA Configuration:
+     Expiry Duration: 3 months
+    Node Address: 192.168.209.101
+    Manager Addresses:
+     192.168.209.101:2377
+
+We can also see details of the swarm using docker node:
+  docker node ls
+    ID                           HOSTNAME         STATUS  AVAILABILITY  MANAGER STATUS
+    k99q6ic98c519uf2ofbe0s4jc *  centos1.gjj.com  Ready   Active        Leader
+
+To add a new manager - first get the manager token:
+  docker swarm join-token manager
+    To add a manager to this swarm, run the following command:
+
+    docker swarm join \
+    --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-45ond6y53p1ci09w5pab6vnrp \
+    192.168.209.101:2377
+
+copy that string, switch to another docker host and paste and the second host will join the swarm as a manager:
+  docker swarm join \
+    --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-45ond6y53p1ci09w5pab6vnrp \
+    192.168.209.101:2377
+      This node joined a swarm as a manager.
+
+Now docker node shows two nodes (one leader, one "reachable"):
+  docker node ls
+    ID                           HOSTNAME         STATUS  AVAILABILITY  MANAGER STATUS
+    k99q6ic98c519uf2ofbe0s4jc    centos1.gjj.com  Ready   Active        Leader
+    rk721raqkonplaivadjiw7pj8 *  centos2.gjj.com  Ready   Active        Reachable
+
+Lets add a worker:
+  docker swarm join-token worker
+    To add a worker to this swarm, run the following command:
+
+    docker swarm join \
+    --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-3w34mnkpastor6lgpb7bzsyy0 \
+    192.168.209.100:2377
+switch to another host:
+    docker swarm join \
+    >     --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-3w34mnkpastor6lgpb7bzsyy0 \
+    >      192.168.209.100:2377
+    This node joined a swarm as a worker.
+ 
+Workers cannot query the node store:
+  docker node ls
+    Error response from daemon: This node is not a swarm manager. Worker nodes can't be used to view or modify cluster state. Please run        this command on a manager node or promote the current node to a manager.
+
+but on a manager node we now see this node added:
+  docker node ls
+    ID                           HOSTNAME         STATUS  AVAILABILITY  MANAGER STATUS
+    2zzxj0qw7lumuol7kwinla5sn    centos4.gjj.com  Ready   Active        
+    k99q6ic98c519uf2ofbe0s4jc    centos1.gjj.com  Ready   Active        Reachable
+    rk721raqkonplaivadjiw7pj8 *  centos2.gjj.com  Ready   Active        Leader
+The blank status shows it is a worker node
+
+To rotate the client tokens issue (on a manager):
+  docker swarm join-token --rotate worker
+      Successfully rotated worker join token.
+
+    To add a worker to this swarm, run the following command:
+
+        docker swarm join \
+       --token SWMTKN-1-4m9zv4int1uglw5viwwxw8u4gr8nc3zumhbf9t2nncabr8w2w1-dtpq3yr3otbs2eeo1oeudtzqb \
+        192.168.209.100:2377
+
+Existing node membership is unnaffected but the old join token will no longer work
+
+To view the client cert:
+  sudo openssl x509 -in /var/lib/docker/swarm/certificates/swarm-node.crt -text
+we can see for example that the organisation is the swarm id, the organisational unit is the node's role and the canonical name is the cryptographic node id.
+On a worker:
+sudo openssl x509 -in /var/lib/docker/swarm/certificates/swarm-node.crt -text
+  Subject: O=wxaqlcr7s1umy9y8opp4ou0ub, OU=swarm-worker, CN=2zzxj0qw7lumuol7kwinla5sn
+or on a manager:
+  Subject: O=wxaqlcr7s1umy9y8opp4ou0ub, OU=swarm-manager, CN=rk721raqkonplaivadjiw7pj8
+
+
+=============================
+Auto-locking a swarm
+=============================
+The Autolock feature affects managers only - not workers
+
+In Docker 1.13 and higher, the Raft logs used by swarm managers are encrypted on disk by default.
+When Docker restarts, both the TLS key used to encrypt communication among swarm nodes, and the key used to encrypt and decrypt Raft logs on disk, are loaded into each manager node’s memoryWe might not want stopped managers to automatically rejoin a swarm as they could decrypt information etc. And we probably dont want to automatically allow restores of swarm backups in case of accidentally overwriting a swarm.
+The auto-lock feature allows you to take ownership of these keys and to require manual unlocking of your managers. 
+
+Autolock is not enabled by default - to enable:
+  docker swarm init --autolock            <-- at creation time
+or:
+  docker swarm update --autolock=true     <-- retrospective enable autolock
+
+This generates a password:
+  docker swarm update --autolock=true     <-- retrospective enable autolock
+    Swarm updated.
+  To unlock a swarm manager after it restarts, run the `docker swarm unlock`
+  command and provide the following key:
+
+    SWMKEY-1-46k4GTnQ2BhKLEjwKwaEx+QB2Cf7UT8d8yWMXj/27q8
+
+  Please remember to store this key in a password manager, since without it you
+  will not be able to restart the manager.
+
+Now if we restart docker on a manager node - we need to specify the password before the manager can rejoin the swarm:
+  systemctl restart docker
+
+And now if i try to update the swarm I get an error message telling me I need to unlock it:
+  docker swarm update --autolock=true
+  Error response from daemon: Swarm is encrypted and needs to be unlocked before it can be used. Please use "docker swarm unlock" to          unlock it.
+  
+  docker node ls
+Error response from daemon: Swarm is encrypted and needs to be unlocked before it can be used. Please use "docker swarm unlock" to unlock it.
+
+We can unlock it by:  
+  docker swarm unlock
+Please enter unlock key:
+
+After which the manager rejoins the swarm and can ls etc
+
+We can change te crertificate expiry time using --cert-expiry eg:
+  docker swarm update --cert-expiry 48h
+  Swarm updated.
+
 
   
+
+
+===============================
+Containerising an app
+===============================
+Analysing a Dockerfile:
+
+  FROM alpine                               <-- Use Apline latest image - Creates a layer
+
+  LABEL maintainer="gareth jones"           <-- creates a lable - no layer, just adds metadata to json manifest
+
+  COPY . /src                               <-- copy content from host to container - Creates a layer
+
+  WORKDIR /src                              <-- sets container workng dir - no layer, just adds metadata to json manifest
+
+  RUN apk add --update nodejs nodejs-npm    <-- installs npm - Creates a layer
+
+  EXPOSE 8080                               <-- exposes port 8080 - no layer, just adds metadata to json manifest
+
+  ENTRYPOINT ["node", "./app.js"]           <-- specify command for container to run - no layer, just adds metadata to json manifest
+
+Lets build and run this:
+  docker build -t garethjones76/appbuild .
+or
+  docker build -t psweb .
+Now we cam list these:
+  docker image ls
+    REPOSITORY                                     TAG                 IMAGE ID            CREATED             SIZE
+    garethjones76/appbuild                         latest              e5f93bb6b678        4 minutes ago       54.5 MB
+    psweb                                          latest              e5f93bb6b678        4 minutes ago       54.5 MB
+Now we can run it
+  docker container run -d --name web1 -p 8080:8080 psweb
+ 
+We can see it running:
+  docker ps
+    CONTAINER ID        IMAGE               COMMAND             CREATED              STATUS              PORTS                    NAMES
+    5ab7bc3ac6bf        psweb               "node ./app.js"     About a minute ago   Up About a minute   0.0.0.0:8080->8080/tcp   web1
+And we can hit the app on http://<host>:8080
+  http://192.168.209.101:8080/
+
+
+=====================
+Mutli-stage builds
+=====================
+Multi-stage builds are a new feature requiring Docker 17.05 used to optimize Dockerfiles while keeping them easy to read and maintain
+Keeping the image size down is a best practise (efficientcy ans ecurity). Each instruction in the Dockerfile adds a layer to the image, and one must clean up any uneeded artifacts before moving on to the next layer. Each stage (test, buil, release) has differnet requiements so it was a challenge to keep the layers as small as possible and to ensure that each layer has the artifacts it needs from the previous layer and nothing else. A common pracise was to have one Dockerfile for development (which contained everything needed to build your application), and a slimmed-down one to use for production, which only contained your application and exactly what was needed to run it.
+
+Multi-stage build files helps resolve this issue.
+
+With multi-stage builds, you use multiple FROM statements in your Dockerfile. Each FROM instruction can use a different base, and each of them begins a new stage of the build - each stage is given an integer number starting at 0 and each stage can be named. Artifacts can be selectively copyied from one stage to another, leaving behind everything not required in the final image
+
+eg:
+  Dockerfile:
+
+  FROM golang:1.7.3
+  WORKDIR /go/src/github.com/alexellis/href-counter/
+  RUN go get -d -v golang.org/x/net/html  
+  COPY app.go .
+  RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app .  <-- build the app 
+
+  FROM alpine:latest  
+  RUN apk --no-cache add ca-certificates
+  WORKDIR /root/
+  COPY --from=0 /go/src/github.com/alexellis/href-counter/app .         <-- copy build artefact created in stage 0 to this image
+  CMD ["./app"]  
+
+To build this use:
+
+  docker build -t garethjones76/myimage:latest .
+
+or better - use named stages:
+  Dockerfile:
+  
+  FROM golang:1.7.3 as builder                                                <-- name this stage "builder"
+  WORKDIR /go/src/github.com/alexellis/href-counter/
+  RUN go get -d -v golang.org/x/net/html  
+  COPY app.go    .
+  RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o app .        <-- build the app
+
+  FROM alpine:latest  
+  RUN apk --no-cache add ca-certificates
+  WORKDIR /root/
+  COPY --from=builder /go/src/github.com/alexellis/href-counter/app .         <-- copy from "builder" stage to 
+  CMD ["./app"] 
+
+
+NB - build stage uses golang as te base image - release stage uses alpine as the base image which is much smaller and more secure
 
 
 
